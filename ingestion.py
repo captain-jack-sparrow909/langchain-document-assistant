@@ -1,3 +1,4 @@
+import asyncio
 import os
 import ssl
 import certifi
@@ -48,4 +49,14 @@ tavily_crawl = TavilyCrawl()
 # Can combine with extraction + mapping logic
 
 
+# main function:
+async def main():
+    """Main function to perform web crawling, content extraction, and vector store ingestion."""
+    log_header("DOCUMENTATION INGESTION PIPELINE")
+
+    log_info("TavilyCrawl: Starting to crawl the documentation from https://python.langchain.com/", Colors.PURPLE)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
