@@ -32,9 +32,20 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small", show_progress_bar=
 vector_store = PineconeVectorStore(index_name=os.environ["PINECONE_INDEX_NAME"], embeddings=embeddings)
 
 # tavily: below is to help an LLM search, explore, and extract structured content from the web.
-tavily_extract = TavilyExtract() 
+tavily_extract = TavilyExtract()   # This tool is used for extracting clean, readable content from a specific URL.
 tavily_map = TavilyMap(max_depth=5, max_breadth=20, max_pages=1000)
+# This is for mapping a website’s structure (like crawling links in a controlled way).
+# Parameters:
+# max_depth=5 → how deep it follows links (link → link → link…)
+# max_breadth=20 → how many links per page it explores
+# max_pages=1000 → hard limit on total pages visited
+
 tavily_crawl = TavilyCrawl()
+# This is the full crawling tool.
+# What it does:
+# Systematically visits multiple pages
+# Extracts content from each page
+# Can combine with extraction + mapping logic
 
 
 
