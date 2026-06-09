@@ -56,6 +56,20 @@ async def main():
 
     log_info("TavilyCrawl: Starting to crawl the documentation from https://python.langchain.com/", Colors.PURPLE)
 
+    # Crawl the website and extract content
+    try:
+        res = tavily_crawl.invoke({
+            "url": "https://python.langchain.com/",
+            "max_depth": 5,
+            "extract_depth": "advanced",
+            "instructions": "content on ai agents"  # needed to let tavily know what to look for when crawling and extracting, this is important to get relevant content and avoid noise
+        })
+        all_docs = res["results"]
+        log_success(f"TavilyCrawl: Successfully crawled and extracted content from the documentation. Total pages crawled: {len(all_docs)}", Colors.GREEN)
+    except Exception as e:
+        log_error(f"TavilyCrawl: Error during crawling - {str(e)}", Colors.RED)
+        return
+
 
 if __name__ == "__main__":
     asyncio.run(main())
