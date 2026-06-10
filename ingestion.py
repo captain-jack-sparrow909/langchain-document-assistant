@@ -30,7 +30,7 @@ os.environ[" REQUESTS_CA_BUNDLE"] = certifi.where()
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small", show_progress_bar=False, chunk_size=50, retry_max_seconds=10)
 
 # vector store:
-vector_store = PineconeVectorStore(index_name=os.environ["PINECONE_INDEX_NAME"], embeddings=embeddings)
+vector_store = PineconeVectorStore(index_name=os.environ["PINECONE_INDEX_NAME"], embedding=embeddings)
 
 # tavily: below is to help an LLM search, explore, and extract structured content from the web.
 tavily_extract = TavilyExtract()   # This tool is used for extracting clean, readable content from a specific URL.
@@ -49,6 +49,35 @@ tavily_crawl = TavilyCrawl()
 # Can combine with extraction + mapping logic
 
 
+
+# utitlity functions:
+async def index_document_async(docs, batch_size=50):
+    """Process documents in batches and add to vector store asynchronously."""
+    log_header("INDEXING DOCUMENTS INTO VECTOR STORE")
+    batches = [docs[i:i + batch_size] for i in range(0, len(docs), batch_size)]
+
+    # async function to add batches to the vector store with error handling
+    async def add_batch_to_vector_store(batch, batch_number):
+        """Add a batch of docs to the vector store."""
+        try:
+            await vector_store.aadd_documents(batch) # aadd_documents is the async version of add_documents, it allows us to add documents to the vector store without blocking the main thread, which is important for performance when dealing with large datasets.
+            log_success(f"Vector Store: Successfully indexed batch {batch_number}. Documents indexed: {len(batch)}")
+        except Exception as e:
+            log_error(f"Vector Store: Error indexing batch {batch_number} - {str(e)}")
+            return False
+        return True
+
+    # process all the batches concurrently :
+    tasks = [add_batch_to_vector_store(batch, idx + 1) for idx, batch in enumerate(batches)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # count successes and failures:
+    success_count = sum(1 for result in results if result is True)
+    failure_count = len(results) - success_count
+    log_info(f"Indexing Summary: Successes: {success_count}, Failures: {failure_count}")
+
+
+
 # main function:
 async def main():
     """Main function to perform web crawling, content extraction, and vector store ingestion."""
@@ -64,10 +93,20 @@ async def main():
             "extract_depth": "advanced",
             "instructions": "content on ai agents"  # needed to let tavily know what to look for when crawling and extracting, this is important to get relevant content and avoid noise
         })
-        all_docs = res["results"]
-        log_success(f"TavilyCrawl: Successfully crawled and extracted content from the documentation. Total pages crawled: {len(all_docs)}", Colors.GREEN)
+        all_docs = [ Document(page_content=doc["raw_content"], metadata={"source": doc["url"]}) for doc in res["results"] ]
+        log_success(f"TavilyCrawl: Successfully crawled and extracted content from the documentation. Total pages crawled: {len(all_docs)}")
+
+        # splitting documents into chunks:
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=200)
+        splitted_docs = text_splitter.split_documents(all_docs)
+        log_success(f"TextSplitter: Successfully split documents into chunks. Total chunks created: {len(splitted_docs)}")
+
+        # index documents into vector store:
+        await index_document_async(splitted_docs, batch_size=500)
+
+
     except Exception as e:
-        log_error(f"TavilyCrawl: Error during crawling - {str(e)}", Colors.RED)
+        log_error(f"TavilyCrawl: Error during crawling - {str(e)}")
         return
 
 
