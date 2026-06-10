@@ -1,0 +1,116 @@
+# to have more control over the crawling process, we will use Tavily's tools separately instead of the full crawl tool. This way we can handle errors more gracefully and have better visibility into each step of the process.
+
+import asyncio
+import os
+import ssl
+import certifi
+
+from dotenv import load_dotenv
+load_dotenv()
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+# CharacterTextSplitter splitter uses a single separator (or a list of separators in a straightforward way) to split text into chunks of a target size.
+# RecursiveCharacterTextSplitter -> Instead of relying on a single separator, it tries a hierarchy of separators, recursively splitting until chunks fit within the desired size.
+from langchain_core.documents import Document
+from langchain_pinecone import PineconeVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_tavily import TavilyCrawl, TavilyExtract, TavilyMap
+
+from logger import (Colors, log_error, log_header, log_info, log_success, log_warning)
+
+
+# configure SSL context to use certifi certificates, this is needed because we're going to use 
+# TavilyCrawl to scrape websites and it uses requests library which doesn't 
+# use the system's CA bundle by default.
+
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+os.environ["SSL_CERT_FILE "] = certifi.where()
+os.environ[" REQUESTS_CA_BUNDLE"] = certifi.where()
+
+
+# embeddings:
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small", show_progress_bar=False, chunk_size=50, retry_max_seconds=10)
+
+# vector store:
+vector_store = PineconeVectorStore(index_name=os.environ["PINECONE_INDEX_NAME"], embedding=embeddings)
+
+# tavily: below is to help an LLM search, explore, and extract structured content from the web.
+tavily_extract = TavilyExtract()   # This tool is used for extracting clean, readable content from a specific URL.
+tavily_map = TavilyMap(max_depth=5, max_breadth=20, max_pages=1000)
+# This is for mapping a website’s structure (like crawling links in a controlled way).
+# Parameters:
+# max_depth=5 → how deep it follows links (link → link → link…)
+# max_breadth=20 → how many links per page it explores
+# max_pages=1000 → hard limit on total pages visited
+
+tavily_crawl = TavilyCrawl()
+# This is the full crawling tool.
+# What it does:
+# Systematically visits multiple pages
+# Extracts content from each page
+# Can combine with extraction + mapping logic
+
+
+
+# utitlity function to process a batch of URLs with TavilyExtract
+def chunk_urls(urls, chunk_size=20):
+    """Utility function to split a list of URLs into chunks."""
+    chunks = []
+    for i in range(0, len(urls), chunk_size):
+        chunk = urls[i:i + chunk_size]
+        chunks.append(chunk)
+    return chunks
+
+async def extract_batch(urls, batch_number):
+    """Extract Content from a batch of URLs using TavilyExtract."""
+    try:
+        docs = await tavily_extract.ainvoke(input={"urls": urls})
+        log_success(f"TavilyExtract: Successfully extracted content from batch {batch_number}. URLs processed: {len(urls)}")
+        return docs
+    except Exception as e:
+        log_error(f"TavilyExtract: Error extracting batch {batch_number} - {str(e)}")
+        return []  # Return empty list on error to continue processing other batches
+    
+async def async_extract_all(url_batches):
+    """Asynchronously extract content from all batches of URLs."""
+    tasks = [extract_batch(batch, idx + 1) for idx, batch in enumerate(url_batches)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Flatten the list of results and filter out any exceptions
+    all_docs = []
+    failed_batches = 0
+    for result in results:
+        if isinstance(result, Exception):
+            failed_batches += 1
+            log_error(f"Batch extraction failed with error: {str(result)}")
+        else:
+            for exracted_content in result["results"]:
+                all_docs.append(Document(page_content=exracted_content["raw_content"], metadata={"source": exracted_content["url"]}))
+    log_info(f"Extraction completed. Total documents extracted: {len(all_docs)}. Failed batches: {failed_batches}", Colors.YELLOW)
+    return all_docs
+
+# main function:
+async def main():
+    """Main function to perform web crawling, content extraction, and vector store ingestion."""
+    log_header("DOCUMENTATION INGESTION PIPELINE")
+
+    log_info("TavilyCrawl: Starting to crawl the documentation from https://python.langchain.com/", Colors.PURPLE)
+
+    # Crawl the website and extract content
+    try:
+        site_map = tavily_map.invoke("https://python.langchain.com/")
+        log_success(f"TavilyMap: Successfully mapped the website structure. Total pages found: {len(site_map['results'])}")
+
+        # for each url, to extract content we'll be using batch processing to speed up the process and handle errors more gracefully.
+        # TavilyExtract can be used in batch mode to process multiple URLs at once, which is more efficient than invoking it separately for each URL.
+        url_batches = chunk_urls(site_map["results"], chunk_size=20)
+        all_docs = await async_extract_all(url_batches)
+
+
+    except Exception as e:
+        log_error(f"TavilyCrawl: Error during crawling - {str(e)}", Colors.RED)
+        return
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
