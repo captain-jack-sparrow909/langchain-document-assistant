@@ -31,7 +31,9 @@ model = init_chat_model(model="gpt-5-nano", model_provider='openai')
 def retrieve_from_vector_store(query: str):
     """Tool to retrieve relevant documents about langchain from the vector store."""
     try:
-        results = vector_store.as_retriever().invoke(query, k=4)
+        results = vector_store.as_retriever().invoke(query, k=4) # as_retriever() converts the vector store into a retriever interface that can be used to fetch relevant documents based on a query. k=4 means we want to retrieve the top 4 most relevant documents for the given query.
+        # as_retriever is better than similarity_search because it can handle more complex retrieval logic and can be more efficient for large datasets, while similarity_search is a simpler method that retrieves documents based on cosine similarity of embeddings, which may not always yield the best results for complex queries.
+        # also on langsmith we have optimized the retriever to be more efficient and effective, so using as_retriever allows us to take advantage of those optimizations.
         log_success(f"Tool: Successfully retrieved {len(results)} relevant documents for query: '{query}'")
 
         # serialize the documents:
